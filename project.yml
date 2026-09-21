@@ -1,0 +1,32 @@
+name: Cleaner
+options:
+  bundleIdPrefix: com.harshilvalecha
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: SBJJK8M4HU
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  Cleaner:
+    type: application
+    platform: iOS
+    sources:
+      - path: Cleaner
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.harshilvalecha.cleaner
+        PRODUCT_NAME: Cleaner
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_CFBundleDisplayName: Cleaner
+        # Both strings say what is read and what is never done with it. The brief
+        # asks for a clear reason; "we need access" is not one.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Cleaner looks through your photo library on this iPhone to find duplicates, screenshots and large videos. Everything stays on the device, and nothing is deleted unless you choose it and confirm."
+        INFOPLIST_KEY_NSContactsUsageDescription: "Cleaner compares your contacts on this iPhone to find duplicate entries. Contacts never leave the device, and nothing is merged or deleted without your confirmation."
+        TARGETED_DEVICE_FAMILY: "1"

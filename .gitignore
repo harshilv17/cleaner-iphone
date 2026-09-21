@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserdatad
+xcuserdata/
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
