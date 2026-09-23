@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct CategoryListView: View {
@@ -5,6 +6,7 @@ struct CategoryListView: View {
 
     @Environment(PhotoLibraryService.self) private var library
     @Environment(Basket.self) private var basket
+    @State private var playing: PlayingVideo?
 
     private var items: [Candidate] {
         switch category {
@@ -18,10 +20,10 @@ struct CategoryListView: View {
         List {
             if items.isEmpty {
                 ContentUnavailableView(
-                    comingSoon ? "Not built yet" : "Nothing found",
+                    "Nothing found",
                     systemImage: category.symbol,
-                    description: Text(comingSoon
-                        ? "Similar photos and duplicate contacts are next."
+                    description: Text(category == .largeVideos
+                        ? "No video on this iPhone is over \(Fmt.bytes(PhotoLibraryService.largeVideoBytes))."
                         : "There is nothing in this category on this iPhone.")
                 )
             } else {
@@ -44,10 +46,10 @@ struct CategoryListView: View {
         .listStyle(.plain)
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var comingSoon: Bool {
-        category == .similarPhotos || category == .duplicateContacts
+        .sheet(item: $playing) { video in
+            VideoPlayer(player: AVPlayer(url: video.url))
+                .ignoresSafeArea()
+        }
     }
 
     private var allSelected: Bool {
@@ -56,23 +58,44 @@ struct CategoryListView: View {
 
     private func row(_ item: Candidate) -> some View {
         let picked = basket.contains(item.id)
-        return Button {
-            basket.toggle(item)
-        } label: {
-            HStack(spacing: 12) {
-                AssetThumbnail(id: item.id, side: 56)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(Fmt.bytes(item.bytes)).font(.subheadline.weight(.medium))
-                    Text(item.subtitle).font(.caption).foregroundStyle(Color.brandDim)
+        return HStack(spacing: 12) {
+            if item.kind == .largeVideo {
+                // Its own button, so tapping the preview plays instead of selecting.
+                Button {
+                    Task {
+                        if let url = await PhotoLibraryService.videoURL(for: item.id) {
+                            playing = PlayingVideo(url: url)
+                        }
+                    }
+                } label: {
+                    AssetThumbnail(id: item.id, side: 56)
+                        .overlay { Image(systemName: "play.fill").foregroundStyle(.white) }
                 }
-                Spacer()
-                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(picked ? Color.brandAccent : Color.brandCardEdge)
+                .buttonStyle(.plain)
             }
-            .contentShape(.rect)
+            Button {
+                basket.toggle(item)
+            } label: {
+                HStack(spacing: 12) {
+                    if item.kind != .largeVideo { AssetThumbnail(id: item.id, side: 56) }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(Fmt.bytes(item.bytes)).font(.subheadline.weight(.medium))
+                        Text(item.subtitle).font(.caption).foregroundStyle(Color.brandDim)
+                    }
+                    Spacer()
+                    Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(picked ? Color.brandAccent : Color.brandCardEdge)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         .listRowBackground(picked ? Color.brandAccent.opacity(0.12) : Color.clear)
     }
+}
+
+private struct PlayingVideo: Identifiable {
+    let url: URL
+    var id: URL { url }
 }

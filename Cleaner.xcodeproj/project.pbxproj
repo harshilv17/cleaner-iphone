@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00A3EFEECE4B6914655DF745 /* SimilarityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC9176A7EE030B37BD84837 /* SimilarityService.swift */; };
+		0A0DA6E7BFDE11F913E0565D /* Clustering.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5B29E05F9CCA84A933CC9EF /* Clustering.swift */; };
 		0F69CBF4DAEDE52C1DAC2A7E /* PhotoLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD9FC29529EE2116434C0F /* PhotoLibraryService.swift */; };
 		32806F4D12E5E9FDB78E6DC5 /* Candidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBCAA577362F1EB8F5128560 /* Candidate.swift */; };
 		3BCAAAC835B122EABBC31230 /* DuplicateContactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78C3E1F7B2399E1ED05B21E4 /* DuplicateContactsView.swift */; };
@@ -22,11 +23,13 @@
 		E1A5497F57E5C28C7F81D0CC /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C8AF84F661C1888A81099C /* Theme.swift */; };
 		E43D80D48DCFA52CFE61D70E /* DeviceStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B530314EFA64C72A35D5BBD /* DeviceStorage.swift */; };
 		E907A5B5290722F54CA460C3 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 477E63C964CA2AAC344A9F9C /* DashboardView.swift */; };
+		EA3FC8588BFCBE2BE4AD17D9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2A54D82D67AF5AF65C05F9AE /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		02F36447FACC66ACCDFDB332 /* ReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewView.swift; sourceTree = "<group>"; };
 		0B224FFCA8F36A3319B1BBB8 /* CleanerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanerApp.swift; sourceTree = "<group>"; };
+		2A54D82D67AF5AF65C05F9AE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		477E63C964CA2AAC344A9F9C /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		62C8AF84F661C1888A81099C /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		6B530314EFA64C72A35D5BBD /* DeviceStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStorage.swift; sourceTree = "<group>"; };
@@ -36,6 +39,7 @@
 		9CBD9FC29529EE2116434C0F /* PhotoLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryService.swift; sourceTree = "<group>"; };
 		AAC61817B1890845290222E9 /* SimilarPhotosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarPhotosView.swift; sourceTree = "<group>"; };
 		B46C20A4BFB6FFB0D08DA39A /* Basket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Basket.swift; sourceTree = "<group>"; };
+		B5B29E05F9CCA84A933CC9EF /* Clustering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clustering.swift; sourceTree = "<group>"; };
 		D69B12E5D0D3E0428BE30B8D /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		DD16303FD10288FCB95B185E /* CategoryListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryListView.swift; sourceTree = "<group>"; };
 		DEC9176A7EE030B37BD84837 /* SimilarityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityService.swift; sourceTree = "<group>"; };
@@ -70,6 +74,7 @@
 		44640656E5E54E971D8CE55C /* Cleaner */ = {
 			isa = PBXGroup;
 			children = (
+				2A54D82D67AF5AF65C05F9AE /* Assets.xcassets */,
 				0B224FFCA8F36A3319B1BBB8 /* CleanerApp.swift */,
 				2A07FC3FC1F1E00A8B3B5DD4 /* Features */,
 				A4AF576BB636F9DE8EDC4657 /* Models */,
@@ -82,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				B46C20A4BFB6FFB0D08DA39A /* Basket.swift */,
+				B5B29E05F9CCA84A933CC9EF /* Clustering.swift */,
 				8AA5EA003E5F52040BF23562 /* ContactsService.swift */,
 				6B530314EFA64C72A35D5BBD /* DeviceStorage.swift */,
 				9CBD9FC29529EE2116434C0F /* PhotoLibraryService.swift */,
@@ -114,6 +120,7 @@
 			buildConfigurationList = 909E32EF268211C72450176A /* Build configuration list for PBXNativeTarget "Cleaner" */;
 			buildPhases = (
 				0BE5B98F89174492F48A6F7A /* Sources */,
+				5FE9B580EF485743AACC17BB /* Resources */,
 			);
 			buildRules = (
 			);
@@ -136,7 +143,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					FF0E29FA33EB210EA1D3AB6F = {
-						DevelopmentTeam = SBJJK8M4HU;
+						DevelopmentTeam = H487427853;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -160,6 +167,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		5FE9B580EF485743AACC17BB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA3FC8588BFCBE2BE4AD17D9 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		0BE5B98F89174492F48A6F7A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -170,6 +188,7 @@
 				32806F4D12E5E9FDB78E6DC5 /* Candidate.swift in Sources */,
 				BD3989DC3BCC46C61D3DEB71 /* CategoryListView.swift in Sources */,
 				5163578A5112A7F2478880F6 /* CleanerApp.swift in Sources */,
+				0A0DA6E7BFDE11F913E0565D /* Clustering.swift in Sources */,
 				B4C76813F6C7416A632DFFFE /* ContactsService.swift in Sources */,
 				E907A5B5290722F54CA460C3 /* DashboardView.swift in Sources */,
 				E43D80D48DCFA52CFE61D70E /* DeviceStorage.swift in Sources */,
@@ -222,7 +241,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = SBJJK8M4HU;
+				DEVELOPMENT_TEAM = H487427853;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -311,7 +330,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = SBJJK8M4HU;
+				DEVELOPMENT_TEAM = H487427853;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

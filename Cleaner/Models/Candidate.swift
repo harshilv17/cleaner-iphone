@@ -2,20 +2,19 @@ import Foundation
 
 /// One thing the app is willing to remove, whatever kind of thing it is.
 ///
-/// Every scanner produces these and the review screen consumes them, so there is a
-/// single delete path in the app rather than one per category.
+/// Every photo scanner produces these and the review screen consumes them, so there
+/// is a single delete path in the app rather than one per category. Contacts merge
+/// from their own screen instead: a merge is not a delete, and iOS offers no undo.
 struct Candidate: Identifiable, Hashable, Sendable {
     enum Kind: String, Sendable {
-        case screenshot, largeVideo, similarPhoto, duplicateContact
+        case screenshot, largeVideo, similarPhoto
     }
 
-    /// `PHAsset.localIdentifier`, or the contact identifier.
+    /// `PHAsset.localIdentifier`.
     let id: String
     let kind: Kind
     let bytes: Int64
     let subtitle: String
-    /// Similar photos arrive in groups; everything else is its own group.
-    var groupID: String?
 }
 
 enum Category: String, CaseIterable, Identifiable, Sendable {

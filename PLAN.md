@@ -1,19 +1,17 @@
 # Storage Cleaner iOS — build plan
 
-> **Status 2026-09-22.** Project scaffolded with xcodegen, **builds clean** and runs on
-> the iPhone 17 Pro Max simulator. All five must-have features are written:
-> storage dashboard, screenshots, large videos, similar photos, duplicate contacts,
-> plus the review gate and all three permission states for both frameworks.
+> **Status 2026-09-23.** Builds clean; all five must-have features written, plus the
+> review gate, both permission flows, app icon, video preview and pull-to-refresh.
 >
-> Verified: the app launches, reads real device capacity, and the permission gate,
-> analyze-first toggle and dark teal styling render correctly.
-> The similarity threshold was measured rather than guessed — near-identical frames
-> score 0.01–0.12, unrelated images 0.79–0.89, so the 0.3 cutoff has a wide margin.
+> Similar photos was rebuilt after testing (section 2.2). Two bugs found on the way:
+> `fastFormat` thumbnails fail with 3303 when none is cached, so every thumbnail was
+> empty and the old pass never compared anything; and **the Simulator cannot run
+> Vision's model** (it errors, or on the CPU returns one vector for every image).
+> The app now self-tests Vision and says "Unavailable" there instead of guessing.
+> The pipeline is verified on real Vision on the Mac with `Checks/distances.swift`.
 >
-> **Not verified: everything that touches a real photo library.** `simctl privacy`
-> does not move PhotoKit's readWrite status on this simulator, so the scan, grouping,
-> selection and delete paths have only been compiled, not run against photos.
-> That needs the iPhone.
+> **Not verified: similar photos on the iPhone itself**, and the delete path against a
+> real library. That needs the device.
 >
 > Next: run on device from Xcode (set a signing team first), then the screen
 > recording and the 150-word note.
@@ -86,6 +84,19 @@ Settings shows (partitioning and system overhead differ). Label it "approximate"
 Per-category reclaimable = bytes our own scans found, streamed in as they finish.
 
 ### 2.2 Similar photos — the hard part, and where the grade is won
+
+> **As built (2026-09-23), superseding the draft below.** Candidates by capture time
+> (±3 min, 12 neighbours; hidden burst frames in, screenshots out) → Vision feature
+> print of a **64 px** thumbnail, parallel, cached on disk → union-find, then each set
+> split around its keeper so every offered photo is itself close to the kept one →
+> keeper = favourite / hand-picked burst frame, then resolution, then aesthetics.
+>
+> Why 64 px, measured on real photos: at 320 px a 1 px blur scores 0.40, as far as a
+> different waterfall (0.41), so a shaken burst frame never matched its sharp twin.
+> At 64 px every crop, pan, rotation, blur and re-encode of one shot is ≤ 0.33 and
+> different photos ≥ 0.59. Tiers: Strict 0.08, Balanced 0.4, Loose 0.5.
+> dHash (Czkawka, difPy) was measured and rejected: a 5–10% pan overlaps unrelated
+> photos. No global copy search across time; out of scope.
 
 Naive approach (compare every photo to every other) is O(n²): 20k photos = 200M
 comparisons. Dead on arrival. Pipeline instead:
@@ -206,7 +217,7 @@ built: **blurry photo detection** (the aesthetics request already returns it) an
 | Xcode install eats day 1 | Start the download before anything else |
 | iCloud-optimised library — originals not on device | `isNetworkAccessAllowed = false` everywhere; operate on thumbnails; show a note when an asset is cloud-only |
 | KVC `fileSize` returns nil on some assets | Fallback path to `AVURLAsset` / resource byte count |
-| Similarity threshold wrong on a real library | Debug slider, calibrate on device on day 5 |
+| Similarity threshold wrong on a real library | Strict / Balanced / Loose picker; `Checks/distances.swift` recalibrates on any folder |
 | Space doesn't drop after delete → looks broken | Explained in UI + Recently Deleted shortcut |
 | No paid dev account → no TestFlight | Brief allows it; submit repo + recording |
 | Contacts in read-only containers | Per-contact error reporting |

@@ -1,15 +1,7 @@
+import Foundation
 import Photos
 import UIKit
 import Vision
-
-/// A photo reduced to what the grouping pass needs, so PHAsset (not Sendable) never
-/// has to cross an isolation boundary.
-struct AssetRef: Sendable {
-    let id: String
-    let date: Date
-    let bytes: Int64
-    let pixels: Int
-}
 
 /// One cluster of near-identical shots, with the keeper already chosen.
 struct SimilarGroup: Identifiable, Sendable {
@@ -20,144 +12,294 @@ struct SimilarGroup: Identifiable, Sendable {
     var reclaimable: Int64 { others.reduce(0) { $0 + $1.bytes } }
 }
 
-/// Finding near-identical photos is the expensive half of this app, and the naive
-/// version is quadratic: 20k photos is 200M comparisons, which never finishes on a
-/// phone. Three things keep it linear-ish:
+/// How close two shots must be to count as the same, as a distance between 64 px
+/// feature prints. Measured across crops, pans, rotation, blur, exposure and
+/// re-encoding of real photos (`Checks/distances.swift` reproduces it):
 ///
-///  1. An exact-duplicate pass on metadata alone — same pixel size, same second,
-///     same byte count — which costs nothing because no pixels are read.
-///  2. A sliding window. Near-identical shots are bursts, seconds apart, so each
-///     photo is only compared with its neighbours in time rather than the whole
-///     library. O(n · k) instead of O(n²).
-///  3. Feature prints computed from small thumbnails, cached by identifier, and
-///     never fetched over the network.
-enum SimilarityService {
-    /// Distance below which two feature prints are treated as the same shot. Vision
-    /// distances are not absolute truth; this wants calibrating against a real
-    /// library, which is what `threshold` being a constant here is admitting.
-    static let threshold: Double = 0.3
-    /// How many later photos each one is compared against.
-    static let window = 12
-    /// Photos closer together than this are candidates; further apart, skip.
-    static let windowSeconds: TimeInterval = 180
+///   re-saved, resized, re-compressed, exposure edits   ≤ 0.05
+///   small crop or pan, slight shake                    ≤ 0.07
+///   3° rotation, 20% crop, 10% pan, mirrored           ≤ 0.17
+///   out of focus                                        ≤ 0.33
+///   different photos, even of the same kind of scene   ≥ 0.59
+enum Strictness: String, CaseIterable, Identifiable, Sendable {
+    case strict, balanced, loose
 
-    static func scan(
-        refs: [AssetRef],
-        progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
-    ) async -> [SimilarGroup] {
-        guard refs.count > 1 else { return [] }
-        let ordered = refs.sorted { $0.date < $1.date }
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
 
-        var union = UnionFind(count: ordered.count)
-        var prints = [Int: FeaturePrintObservation]()
-
-        for i in 0..<ordered.count {
-            if i % 20 == 0 { progress(i, ordered.count) }
-            for j in (i + 1)..<min(i + 1 + window, ordered.count) {
-                let a = ordered[i], b = ordered[j]
-                if b.date.timeIntervalSince(a.date) > windowSeconds { break }
-                if union.find(i) == union.find(j) { continue }
-
-                // Free pass first: identical geometry and byte count is a copy.
-                if a.pixels == b.pixels, a.bytes == b.bytes, a.bytes > 0 {
-                    union.union(i, j)
-                    continue
-                }
-                guard let pa = await featurePrint(for: a.id, cache: &prints, index: i),
-                      let pb = await featurePrint(for: b.id, cache: &prints, index: j)
-                else { continue }
-                if let d = try? pa.distance(to: pb), d < threshold {
-                    union.union(i, j)
-                }
-            }
+    var threshold: Double {
+        switch self {
+        case .strict: 0.08
+        case .balanced: 0.4
+        case .loose: 0.5
         }
-
-        progress(ordered.count, ordered.count)
-
-        // Turn the clusters into groups, dropping the singletons.
-        var buckets = [Int: [AssetRef]]()
-        for (index, ref) in ordered.enumerated() {
-            buckets[union.find(index), default: []].append(ref)
-        }
-
-        var groups: [SimilarGroup] = []
-        for (_, members) in buckets where members.count > 1 {
-            let keeper = await bestShot(among: members)
-            let others = members.filter { $0.id != keeper }.map {
-                Candidate(
-                    id: $0.id,
-                    kind: .similarPhoto,
-                    bytes: $0.bytes,
-                    subtitle: $0.date.formatted(date: .abbreviated, time: .shortened),
-                    groupID: keeper
-                )
-            }
-            groups.append(SimilarGroup(id: keeper, keeper: keeper, others: others))
-        }
-        return groups.sorted { $0.reclaimable > $1.reclaimable }
     }
 
-    /// Apple already solved "which of these is the good one": the aesthetics request
-    /// returns a score and a flag for utility shots (receipts, screenshots of text).
-    /// Falls back to the biggest file, which is usually the least compressed.
-    private static func bestShot(among members: [AssetRef]) async -> String {
-        var best = members.max(by: { $0.bytes < $1.bytes })?.id ?? members[0].id
-        var bestScore = -Float.greatestFiniteMagnitude
-        for member in members {
-            guard let image = await thumbnail(for: member.id, side: 512),
-                  let cg = image.cgImage else { continue }
-            let request = CalculateImageAestheticsScoresRequest()
-            guard let observation = try? await request.perform(on: cg) else { continue }
-            let score = observation.isUtility ? observation.overallScore - 1 : observation.overallScore
-            if score > bestScore {
-                bestScore = score
-                best = member.id
-            }
+    var blurb: String {
+        switch self {
+        case .strict: "Near-exact copies: the same shot re-saved, resized or lightly edited."
+        case .balanced: "The same moment: bursts and retakes, including the blurry frame."
+        case .loose: "A bit similar: the same scene, reframed or a moment later."
         }
-        return best
-    }
-
-    private static func featurePrint(
-        for id: String,
-        cache: inout [Int: FeaturePrintObservation],
-        index: Int
-    ) async -> FeaturePrintObservation? {
-        if let hit = cache[index] { return hit }
-        guard let image = await thumbnail(for: id, side: 320), let cg = image.cgImage else {
-            return nil
-        }
-        let request = GenerateImageFeaturePrintRequest()
-        guard let observation = try? await request.perform(on: cg) else { return nil }
-        cache[index] = observation
-        return observation
-    }
-
-    private static func thumbnail(for id: String, side: CGFloat) async -> UIImage? {
-        await PhotoLibraryService.thumbnail(for: id, side: side)
     }
 }
 
-/// Plain union-find. Grouping is transitive — if A matches B and B matches C, all
-/// three belong together even when A and C were never compared.
-struct UnionFind {
-    private var parent: [Int]
+/// Every distance the scan measured. Grouping is a function of this plus a threshold,
+/// so changing strictness regroups without reading a single photo again.
+struct SimilarityIndex: Sendable {
+    /// Date-ordered; pairs and prints index into this.
+    let refs: [AssetRef]
+    let pairs: [Clustering.Pair]
+    /// Prints of photos in at least one pair, the only photos grouping can touch.
+    let prints: [Int: FeaturePrintObservation]
 
-    init(count: Int) { parent = Array(0..<count) }
+    static let empty = SimilarityIndex(refs: [], pairs: [], prints: [:])
+}
 
-    mutating func find(_ i: Int) -> Int {
-        var root = i
-        while parent[root] != root { root = parent[root] }
-        var walk = i
-        while parent[walk] != root {           // path compression
-            let next = parent[walk]
-            parent[walk] = root
-            walk = next
+/// Finding similar photos, on the device, fast enough for a 20k library:
+///
+///  1. Candidates come from capture time (`Clustering.candidatePairs`): similar shots
+///     are taken seconds apart, so each photo is compared only with its neighbours.
+///     O(n · k) instead of O(n²), and photos with no neighbour are never read.
+///  2. Each candidate gets a Vision feature print from a 64 px thumbnail, in parallel,
+///     cached on disk, so a rescan only pays for new or edited photos.
+///  3. Groups are split around their best photo, and the best photo is chosen by
+///     protection, resolution, then Vision's aesthetics score.
+///
+/// Perceptual hashes (dHash and friends) were measured and rejected: a 5–10% camera
+/// pan moves 7–36 of 64 bits, overlapping unrelated photos at 21–34. They find
+/// copies and nothing "a bit similar", which the prints handle as well.
+enum SimilarityService {
+    /// Measured: at 320 px the print mostly tracks sharpness, and a slightly blurred
+    /// copy scores further from its original (0.40) than a different waterfall does
+    /// (0.41). At 64 px the same shot stays under 0.33 however blurred, and different
+    /// photos stay above 0.59. Bump the `VisionCache` file when changing this.
+    static let printSide: CGFloat = 64
+    /// The keeper choice is about sharpness and exposure, so it gets a real image.
+    static let scoreSide: CGFloat = 320
+
+    /// `nil` when Vision cannot tell images apart on this device (in the Simulator it
+    /// returns one vector for everything). Better no groups than every photo in one.
+    static func index(
+        _ refs: [AssetRef],
+        progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
+    ) async -> SimilarityIndex? {
+        guard await visionWorks() else { return nil }
+        let refs = refs.sorted { $0.date < $1.date }
+        await VisionCache.shared.retain(Set(refs.map(\.key)))
+
+        let candidates = Clustering.candidatePairs(refs)
+        let needed = Array(Set(candidates.flatMap { [$0.0, $0.1] })).sorted()
+        let prints = await concurrentMap(needed, progress: progress) { i in
+            await featurePrint(refs[i])
         }
-        return root
+
+        let pairs = candidates.compactMap { i, j -> Clustering.Pair? in
+            guard let a = prints[i], let b = prints[j],
+                  let d = try? a.distance(to: b),
+                  d < Strictness.loose.threshold
+            else { return nil }
+            return .init(a: i, b: j, distance: d)
+        }
+        let paired = Set(pairs.flatMap { [$0.a, $0.b] })
+        await VisionCache.shared.save()
+        return SimilarityIndex(refs: refs, pairs: pairs, prints: prints.filter { paired.contains($0.key) })
     }
 
-    mutating func union(_ a: Int, _ b: Int) {
-        let (ra, rb) = (find(a), find(b))
-        if ra != rb { parent[rb] = ra }
+    static func groups(in index: SimilarityIndex, threshold: Double) async -> [SimilarGroup] {
+        let refs = index.refs
+        // Only photos with a pair under the threshold can end up grouped; score just those.
+        let members = Array(Set(index.pairs.filter { $0.distance < threshold }.flatMap { [$0.a, $0.b] })).sorted()
+        guard !members.isEmpty else { return [] }
+
+        let bytes = PhotoLibraryService.bytes(for: members.map { refs[$0].id })
+        let scores = await concurrentMap(members) { i in await aestheticsScore(refs[i]) }
+        await VisionCache.shared.save()
+
+        // Protected photos first; then the higher resolution, so a shrunken copy is
+        // never the one kept; then the better-looking shot; then the bigger file.
+        func isBetter(_ a: Int, _ b: Int) -> Bool {
+            let (ra, rb) = (refs[a], refs[b])
+            if ra.protected != rb.protected { return ra.protected }
+            if ra.pixels != rb.pixels { return ra.pixels > rb.pixels }
+            let (sa, sb) = (scores[a] ?? -.infinity, scores[b] ?? -.infinity)
+            if sa != sb { return sa > sb }
+            return bytes[ra.id, default: 0] > bytes[rb.id, default: 0]
+        }
+
+        let groups = Clustering.groups(refs, pairs: index.pairs, threshold: threshold, isBetter: isBetter) { a, b in
+            guard let pa = index.prints[a], let pb = index.prints[b] else { return nil }
+            return try? pa.distance(to: pb)
+        }
+        return groups.map { group in
+            let keeper = refs[group.keeper].id
+            return SimilarGroup(id: keeper, keeper: keeper, others: group.others.map { i in
+                Candidate(
+                    id: refs[i].id,
+                    kind: .similarPhoto,
+                    bytes: bytes[refs[i].id, default: 0],
+                    subtitle: refs[i].date.formatted(date: .abbreviated, time: .shortened)
+                )
+            })
+        }
+        .sorted { $0.reclaimable > $1.reclaimable }
+    }
+
+    // MARK: - Vision
+
+    private static func featurePrint(_ ref: AssetRef) async -> FeaturePrintObservation? {
+        if let hit = await VisionCache.shared.featurePrint(ref.key) { return hit }
+        guard let image = await PhotoLibraryService.thumbnail(for: ref.id, side: printSide),
+              let cg = image.cgImage,
+              let observation = try? await GenerateImageFeaturePrintRequest()
+                .perform(on: cg, orientation: image.cgOrientation)
+        else { return nil }
+        await VisionCache.shared.store(observation, for: ref.key)
+        return observation
+    }
+
+    /// Apple already solved "which of these is the good one": the aesthetics request
+    /// scores sharpness and exposure, and flags utility shots (receipts, documents),
+    /// which are pushed down so a real photo wins over a snap of a page.
+    private static func aestheticsScore(_ ref: AssetRef) async -> Float? {
+        if let hit = await VisionCache.shared.score(ref.key) { return hit }
+        guard let image = await PhotoLibraryService.thumbnail(for: ref.id, side: scoreSide),
+              let cg = image.cgImage,
+              let observation = try? await CalculateImageAestheticsScoresRequest()
+                .perform(on: cg, orientation: image.cgOrientation)
+        else { return nil }
+        let score = observation.isUtility ? observation.overallScore - 1 : observation.overallScore
+        await VisionCache.shared.store(score, for: ref.key)
+        return score
+    }
+
+    /// Two images that look nothing alike must come out far apart before any photo is
+    /// grouped. A working model scores these 1.39. The Simulator's cannot run at all,
+    /// or, forced onto the CPU, returns the same vector for every image.
+    private static func visionWorks() async -> Bool {
+        guard let plain = canary(striped: false), let striped = canary(striped: true),
+              let a = try? await GenerateImageFeaturePrintRequest().perform(on: plain),
+              let b = try? await GenerateImageFeaturePrintRequest().perform(on: striped),
+              let d = try? a.distance(to: b)
+        else { return false }
+        return d > Strictness.loose.threshold
+    }
+
+    private static func canary(striped: Bool) -> CGImage? {
+        let side = Int(printSide)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        if striped {
+            context.setFillColor(gray: 0, alpha: 1)
+            for y in stride(from: 0, to: side, by: 8) {
+                context.fill(CGRect(x: 0, y: y, width: side, height: 4))
+            }
+        }
+        return context.makeImage()
+    }
+
+    /// Runs `work` over `items` with at most one task per core in flight, so a 20k-photo
+    /// library does not queue 20k thumbnail requests at once.
+    private static func concurrentMap<T: Sendable>(
+        _ items: [Int],
+        progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in },
+        _ work: @escaping @Sendable (Int) async -> T?
+    ) async -> [Int: T] {
+        await withTaskGroup(of: (Int, T?).self) { group in
+            var pending = items.makeIterator()
+            for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
+                guard let i = pending.next() else { break }
+                group.addTask { (i, await work(i)) }
+            }
+            var out = [Int: T]()
+            var done = 0
+            for await (i, value) in group {
+                out[i] = value
+                done += 1
+                if done % 20 == 0 { progress(done, items.count) }
+                if let next = pending.next() { group.addTask { (next, await work(next)) } }
+            }
+            progress(items.count, items.count)
+            return out
+        }
+    }
+}
+
+extension UIImage {
+    /// PhotoKit hands back camera photos with the pixels as the sensor stored them and
+    /// the rotation in `imageOrientation`. Vision has to be told, or a portrait photo
+    /// and its re-saved (already rotated) copy look 90° apart.
+    var cgOrientation: CGImagePropertyOrientation {
+        switch imageOrientation {
+        case .up: .up
+        case .down: .down
+        case .left: .left
+        case .right: .right
+        case .upMirrored: .upMirrored
+        case .downMirrored: .downMirrored
+        case .leftMirrored: .leftMirrored
+        case .rightMirrored: .rightMirrored
+        @unknown default: .up
+        }
+    }
+}
+
+/// Feature prints and aesthetics scores, kept on disk between launches. A cold scan
+/// pays for Vision once; every later scan only reads photos that are new or edited.
+///
+/// ponytail: one binary plist rewritten whole on save — ~3 KB per photo, so about
+/// 60 MB at 20k photos. Move to SwiftData or a SQLite blob table if that write shows up.
+actor VisionCache {
+    static let shared = VisionCache()
+
+    private struct Store: Codable {
+        var prints: [String: FeaturePrintObservation] = [:]
+        var scores: [String: Float] = [:]
+    }
+
+    private var store: Store
+    private var dirty = false
+    /// The version is the print recipe: v2 is 64 px. A print made another way is not
+    /// comparable, so a new recipe gets a new file.
+    private let url = URL.cachesDirectory.appending(path: "vision-cache-v2.plist")
+
+    private init() {
+        store = (try? Data(contentsOf: url))
+            .flatMap { try? PropertyListDecoder().decode(Store.self, from: $0) } ?? Store()
+    }
+
+    func featurePrint(_ key: String) -> FeaturePrintObservation? { store.prints[key] }
+    func score(_ key: String) -> Float? { store.scores[key] }
+
+    func store(_ print: FeaturePrintObservation, for key: String) {
+        store.prints[key] = print
+        dirty = true
+    }
+
+    func store(_ score: Float, for key: String) {
+        store.scores[key] = score
+        dirty = true
+    }
+
+    /// Drops entries for photos that were deleted or edited since the last scan.
+    func retain(_ live: Set<String>) {
+        let before = store.prints.count + store.scores.count
+        store.prints = store.prints.filter { live.contains($0.key) }
+        store.scores = store.scores.filter { live.contains($0.key) }
+        if store.prints.count + store.scores.count != before { dirty = true }
+    }
+
+    func save() {
+        guard dirty else { return }
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        guard let data = try? encoder.encode(store) else { return }
+        try? data.write(to: url, options: .atomic)
+        dirty = false
     }
 }

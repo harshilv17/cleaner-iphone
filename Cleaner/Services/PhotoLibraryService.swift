@@ -1,3 +1,4 @@
+import AVFoundation
 import OSLog
 import Photos
 import SwiftUI
@@ -25,8 +26,22 @@ final class PhotoLibraryService {
     /// library shows movement rather than one motionless word.
     private(set) var similarDone = 0
     private(set) var similarTotal = 0
+    /// Set while a strictness change is regrouping; only new keepers cost Vision work.
+    private(set) var regrouping = false
+    /// Vision failed its self-test (always, in the Simulator), so nothing is grouped
+    /// and the UI says why rather than claiming there are no duplicates.
+    private(set) var similarUnavailable = false
     /// Set after a delete so the UI can be honest about Recently Deleted.
     private(set) var pendingPurge: Int64 = 0
+
+    var strictness: Strictness = .balanced {
+        didSet { if strictness != oldValue { Task { await regroup() } } }
+    }
+    private var index = SimilarityIndex.empty
+
+    /// Videos under this are not worth a row: a phone full of 5-second clips is not
+    /// where the space went.
+    nonisolated static let largeVideoBytes: Int64 = 20_000_000
 
     func refreshAccess() {
         access = Self.map(PHPhotoLibrary.authorizationStatus(for: .readWrite))
@@ -46,41 +61,69 @@ final class PhotoLibraryService {
         }
     }
 
+    /// Safe to call again (pull to refresh, limited picker): the Vision cache makes a
+    /// rescan cost only what changed since the last one.
     func scan() async {
         guard access.canScan, !scanning else { return }
         scanning = true
         // The cheap fetches land first so the dashboard has numbers immediately.
-        screenshots = Self.fetchScreenshots()
-        largeVideos = Self.fetchLargeVideos()
+        // Off the main actor: the size lookup is per asset and adds up.
+        (screenshots, largeVideos) = await Task.detached {
+            (Self.fetchScreenshots(), Self.fetchLargeVideos())
+        }.value
         scanning = false
 
         guard !scanningSimilar else { return }
         scanningSimilar = true
         defer { scanningSimilar = false }
-        let refs = Self.fetchImageRefs()
+        let refs = await Task.detached { Self.fetchImageRefs() }.value
         similarTotal = refs.count
         similarDone = 0
-        log.notice("access=\(String(describing: self.access)) screenshots=\(self.screenshots.count) videos=\(self.largeVideos.count) imageRefs=\(refs.count) firstBytes=\(refs.first?.bytes ?? -1)")
-        similarGroups = await SimilarityService.scan(refs: refs) { done, total in
+        log.notice("access=\(String(describing: self.access)) screenshots=\(self.screenshots.count) videos=\(self.largeVideos.count) imageRefs=\(refs.count)")
+        let built = await SimilarityService.index(refs) { done, total in
             Task { @MainActor in
                 self.similarDone = done
                 self.similarTotal = total
             }
         }
-        log.notice("similarGroups=\(self.similarGroups.count) reclaimable=\(self.similarGroups.reduce(0) { $0 + $1.reclaimable })")
+        similarUnavailable = built == nil
+        index = built ?? .empty
+        for pair in index.pairs {
+            // Calibration data for the strictness thresholds, on device:
+            // `log stream --level debug --predicate 'subsystem == "cleaner"'`.
+            log.debug("distance \(pair.distance, format: .fixed(precision: 3)) \(self.index.refs[pair.a].id) \(self.index.refs[pair.b].id)")
+        }
+        await regroup()
+        log.notice("pairs=\(self.index.pairs.count) similarGroups=\(self.similarGroups.count) reclaimable=\(self.similarGroups.reduce(0) { $0 + $1.reclaimable })")
+    }
+
+    private func regroup() async {
+        let wanted = strictness
+        regrouping = true
+        let groups = await SimilarityService.groups(in: index, threshold: wanted.threshold)
+        // A later strictness change may have finished first; the newest one wins.
+        guard wanted == strictness else { return }
+        similarGroups = groups
+        regrouping = false
     }
 
     /// Everything the grouping pass needs, without carrying PHAsset across actors.
-    private static func fetchImageRefs() -> [AssetRef] {
+    /// Hidden burst frames are included, since a burst is the classic pile of
+    /// near-identical shots. Screenshots are left out: they have their own category,
+    /// and counting them twice would inflate "could be freed".
+    private nonisolated static func fetchImageRefs() -> [AssetRef] {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        options.includeAllBurstAssets = true
         var out: [AssetRef] = []
         PHAsset.fetchAssets(with: .image, options: options).enumerateObjects { asset, _, _ in
+            guard !asset.mediaSubtypes.contains(.photoScreenshot) else { return }
             out.append(AssetRef(
                 id: asset.localIdentifier,
                 date: asset.creationDate ?? .distantPast,
-                bytes: assetBytes(asset),
-                pixels: asset.pixelWidth * asset.pixelHeight
+                modified: asset.modificationDate,
+                pixels: asset.pixelWidth * asset.pixelHeight,
+                protected: asset.isFavorite || asset.burstSelectionTypes.contains(.userPick)
             ))
         }
         return out
@@ -90,7 +133,7 @@ final class PhotoLibraryService {
 
     /// The system already maintains a Screenshots album, so this is a fetch rather
     /// than a detector.
-    private static func fetchScreenshots() -> [Candidate] {
+    private nonisolated static func fetchScreenshots() -> [Candidate] {
         let albums = PHAssetCollection.fetchAssetCollections(
             with: .smartAlbum, subtype: .smartAlbumScreenshots, options: nil
         )
@@ -110,12 +153,11 @@ final class PhotoLibraryService {
         return out
     }
 
-    private static func fetchLargeVideos() -> [Candidate] {
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "duration", ascending: false)]
+    private nonisolated static func fetchLargeVideos() -> [Candidate] {
         var out: [Candidate] = []
-        PHAsset.fetchAssets(with: .video, options: options).enumerateObjects { asset, _, _ in
+        PHAsset.fetchAssets(with: .video, options: nil).enumerateObjects { asset, _, _ in
             let bytes = assetBytes(asset)
+            guard bytes >= largeVideoBytes else { return }
             let mins = Int(asset.duration) / 60
             let secs = Int(asset.duration) % 60
             out.append(Candidate(
@@ -132,10 +174,9 @@ final class PhotoLibraryService {
     /// universal use, but it is an undocumented key, so a nil falls back to an
     /// estimate from the pixel count rather than reporting zero and hiding the asset.
     ///
-    /// ponytail: metadata only, no file is read — fast enough to run on the main
-    /// actor. If a 50k-video library ever hitches here, move it to a background
-    /// context keyed by localIdentifier.
-    static func assetBytes(_ asset: PHAsset) -> Int64 {
+    /// Metadata only, no file is read — but it is a lookup per asset, so callers run
+    /// it off the main actor.
+    nonisolated static func assetBytes(_ asset: PHAsset) -> Int64 {
         for resource in PHAssetResource.assetResources(for: asset) {
             if let size = resource.value(forKey: "fileSize") as? Int64, size > 0 {
                 return size
@@ -144,45 +185,59 @@ final class PhotoLibraryService {
         return Int64(asset.pixelWidth * asset.pixelHeight) / 4
     }
 
-    /// Fetch a small rendition of an asset.
+    /// A rendition exactly `side` pixels on its short edge.
     ///
-    /// The first attempt stays strictly local. On an iCloud-optimised library that
-    /// fails with `networkAccessRequired` (3303) and, with no retry, every thumbnail
-    /// in the app is an empty grey box and the similarity pass finds nothing — which
-    /// is exactly what a "messy" real library looks like. So the retry allows the
-    /// network, but only ever for these small renditions: `fastFormat` at a few
-    /// hundred pixels never pulls the full-size original down.
+    /// `highQualityFormat`, because `fastFormat` only hands back a thumbnail that is
+    /// already cached and fails with `networkAccessRequired` (3303) when there is
+    /// none, network allowed or not: a fresh import, an iCloud-optimised library.
+    /// That left every thumbnail a grey box and the similarity pass with no input.
+    /// The network is allowed for this small rendition only, never the original.
     nonisolated static func thumbnail(for id: String, side: CGFloat) async -> UIImage? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
         else { return nil }
-        let target = CGSize(width: side, height: side)
-        if let local = await request(asset, target, network: false) { return local }
-        return await request(asset, target, network: true)
-    }
-
-    private nonisolated static func request(
-        _ asset: PHAsset, _ target: CGSize, network: Bool
-    ) async -> UIImage? {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .fastFormat
-        options.resizeMode = .fast
-        options.isNetworkAccessAllowed = network
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .exact
+        options.isNetworkAccessAllowed = true
         return await withCheckedContinuation { continuation in
             var resumed = false
             PHImageManager.default().requestImage(
-                for: asset, targetSize: target, contentMode: .aspectFill, options: options
-            ) { image, info in
-                // fastFormat can still deliver a degraded pass first; take the first
-                // usable result and ignore the rest, because resuming twice traps.
-                let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                guard !resumed, image != nil || !degraded else { return }
+                for: asset, targetSize: CGSize(width: side, height: side),
+                contentMode: .aspectFill, options: options
+            ) { image, _ in
+                // One call is documented for highQualityFormat; resuming twice traps.
+                guard !resumed else { return }
                 resumed = true
                 continuation.resume(returning: image)
             }
         }
     }
 
-    static func assets(for ids: [String]) -> [PHAsset] {
+    nonisolated static func bytes(for ids: [String]) -> [String: Int64] {
+        var out = [String: Int64]()
+        for asset in assets(for: ids) { out[asset.localIdentifier] = assetBytes(asset) }
+        return out
+    }
+
+    /// A playable file for the preview. `.original` hands back a plain file even for
+    /// slo-mo, which would otherwise arrive as a composition with no URL.
+    ///
+    /// ponytail: an iCloud-only video downloads in full before it plays. Switch to
+    /// `requestPlayerItem` for streaming if that wait shows up on device.
+    nonisolated static func videoURL(for id: String) async -> URL? {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
+        else { return nil }
+        let options = PHVideoRequestOptions()
+        options.version = .original
+        options.isNetworkAccessAllowed = true
+        return await withCheckedContinuation { continuation in
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { av, _, _ in
+                continuation.resume(returning: (av as? AVURLAsset)?.url)
+            }
+        }
+    }
+
+    nonisolated static func assets(for ids: [String]) -> [PHAsset] {
         guard !ids.isEmpty else { return [] }
         let result = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
         var out: [PHAsset] = []
@@ -217,6 +272,14 @@ final class PhotoLibraryService {
             let kept = group.others.filter { !ids.contains($0.id) }
             return kept.isEmpty ? nil : SimilarGroup(id: group.id, keeper: group.keeper, others: kept)
         }
+        // Keep the index in step, or the next strictness change would regroup
+        // photos that no longer exist.
+        let gone = Set(ids)
+        index = SimilarityIndex(
+            refs: index.refs,
+            pairs: index.pairs.filter { !gone.contains(index.refs[$0.a].id) && !gone.contains(index.refs[$0.b].id) },
+            prints: index.prints
+        )
         return true
     }
 

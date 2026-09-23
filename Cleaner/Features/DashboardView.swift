@@ -59,6 +59,7 @@ struct DashboardView: View {
             }
             .padding(16)
         }
+        .refreshable { await library.scan() }
     }
 
     private var storageCard: some View {
@@ -93,7 +94,7 @@ struct DashboardView: View {
                 if library.scanningSimilar {
                     VStack(alignment: .leading, spacing: 4) {
                         ProgressView(value: similarFraction).tint(.brandAccent)
-                        Text("Comparing photo \(Fmt.count(library.similarDone)) of \(Fmt.count(library.similarTotal))")
+                        Text("Reading photo \(Fmt.count(library.similarDone)) of \(Fmt.count(library.similarTotal))")
                             .font(.caption2).foregroundStyle(Color.brandDim)
                     }
                     .padding(.top, 4)
@@ -165,7 +166,9 @@ struct DashboardView: View {
                     guard let scene = UIApplication.shared.connectedScenes
                         .compactMap({ $0 as? UIWindowScene }).first,
                         let root = scene.keyWindow?.rootViewController else { return }
-                    PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: root)
+                    PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: root) { _ in
+                        Task { await library.scan() }
+                    }
                 }
                 .buttonStyle(.bordered)
             }
@@ -219,6 +222,7 @@ struct DashboardView: View {
             return n > 0 ? Fmt.bytes(n) : "None"
         case .similarPhotos:
             if library.scanningSimilar { return "Scanning…" }
+            if library.similarUnavailable { return "Unavailable" }
             let n = library.similarGroups.reduce(0) { $0 + $1.reclaimable }
             return n > 0 ? Fmt.bytes(n) : "None"
         case .duplicateContacts:

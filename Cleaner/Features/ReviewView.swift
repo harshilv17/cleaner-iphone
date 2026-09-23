@@ -12,9 +12,7 @@ struct ReviewView: View {
     @State private var cancelled = false
 
     private var photoItems: [Candidate] {
-        basket.items.values
-            .filter { $0.kind != .duplicateContact }
-            .sorted { $0.bytes > $1.bytes }
+        basket.items.values.sorted { $0.bytes > $1.bytes }
     }
 
     var body: some View {

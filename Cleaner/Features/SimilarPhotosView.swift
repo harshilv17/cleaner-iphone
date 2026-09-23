@@ -8,18 +8,49 @@ struct SimilarPhotosView: View {
     @Environment(Basket.self) private var basket
 
     var body: some View {
+        @Bindable var library = library
+        VStack(spacing: 0) {
+            VStack(spacing: 6) {
+                Picker("Match", selection: $library.strictness) {
+                    ForEach(Strictness.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .disabled(library.scanningSimilar || library.similarUnavailable)
+                Text(library.strictness.blurb)
+                    .font(.caption).foregroundStyle(Color.brandDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            groups
+        }
+        .navigationTitle("Similar photos")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder private var groups: some View {
         Group {
-            if library.scanningSimilar && library.similarGroups.isEmpty {
+            if library.similarUnavailable {
+                ContentUnavailableView(
+                    "Can't compare photos here",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("Apple's image model is not working on this device (it never does in the Simulator). Cleaner will not guess, so no photo is marked as similar.")
+                )
+            } else if library.scanningSimilar && library.similarGroups.isEmpty {
                 VStack(spacing: 10) {
                     ProgressView()
                     Text("Comparing your photos on this iPhone…")
                         .font(.footnote).foregroundStyle(Color.brandDim)
                 }
+            } else if library.regrouping {
+                ProgressView("Regrouping…").frame(maxHeight: .infinity)
             } else if library.similarGroups.isEmpty {
                 ContentUnavailableView(
                     "No near-identical shots",
                     systemImage: "square.on.square",
-                    description: Text("Nothing in this library looks like a duplicate.")
+                    description: Text(library.strictness == .loose
+                        ? "Nothing in this library looks like a duplicate."
+                        : "Try Loose to include shots that are similar, not near-identical.")
                 )
             } else {
                 List {
@@ -51,8 +82,7 @@ struct SimilarPhotosView: View {
                 .listStyle(.insetGrouped)
             }
         }
-        .navigationTitle("Similar photos")
-        .navigationBarTitleDisplayMode(.inline)
+        .frame(maxHeight: .infinity)
     }
 
     private func selected(_ group: SimilarGroup) -> Bool {

@@ -24,8 +24,4 @@ final class Basket {
     func add(_ cs: [Candidate]) { for c in cs { items[c.id] = c } }
     func remove(_ ids: [String]) { for id in ids { items[id] = nil } }
     func clear() { items.removeAll() }
-
-    func ids(of kind: Candidate.Kind) -> [String] {
-        items.values.filter { $0.kind == kind }.map(\.id)
-    }
 }
